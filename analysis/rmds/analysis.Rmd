@@ -1,0 +1,303 @@
+---
+title: "Rereading Books"
+author: "Amber Thomas"
+date: "Last updated: `r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  puddingR::puddingTheme:
+    toc: true
+    code_folding: "hide"
+    number_sections: "false"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+## Introduction
+
+Several months ago, I had a conversation with my coworkers at The Pudding about books, movies, and TV shows that I re-watch/re-read. I love diving back into forms of entertainment that I've experienced before. Sometimes I do it because I crave something familiar and the story seems warm and cozy. Sometimes I feel like I do this to prevent "food-envy", that is, the feeling I get when I try something new at a restaurant and wish that it was my tried and true favorite. Regardless of the reason, I found myself in the minority amongst my coworkers that actually likes to revisit media. It got me thinking about the books that other readers sink into time and time again. 
+
+
+### Load Packages
+
+
+```{r load_packages, message = FALSE, eval = TRUE}
+# For general data cleaning and analysis
+library(tidyverse)
+
+# If your data includes dates that need to be wrangled
+library(lubridate)
+
+# For keeping your files in relative directories
+library(here)
+
+# For interactive/searchable tables in your report
+library(DT)
+
+# For Goodreads API
+library(rgoodreads)
+
+# For custom API access
+library(httr)
+library(xml2)
+```
+
+## Exploration
+### My own data
+
+To get a feel for how the Goodreads API works, I'll start by using it to export my own reader data and see if I can get the data I need just through the API.
+
+```{r}
+# set my gr key into global environment like this: Sys.setenv("GOODREADS_KEY"='x'))
+```
+
+
+```{r}
+myData <- rgoodreads::user(16950883)
+glimpse(myData)
+```
+
+Hmm, looks like that's not quite what I'm looking for. Maybe I'll have to spin up my own functions for this. 
+
+
+```{r}
+API_KEY <- Sys.getenv("GOODREADS_KEY")
+URL <- "https://www.goodreads.com/review/list"
+get_read_shelf <- function(userID) {
+  shelf <- GET(URL, query = list(v = 2, key = API_KEY, id = userID, shelf = "read", per_page = 200))
+  shelf_contents <- content(shelf, as = "parsed")
+  return(shelf_contents)
+}
+
+myReadShelf <- get_read_shelf(1923002)
+
+find_total <- function(shelf){
+  kids <- xml_children(shelf)
+  total <- xml_attr(kids[3], "total")
+  
+  tot <- shelf %>% 
+    xml_attrs() 
+  
+  df <- tibble(total)
+  
+  return (df)
+}
+
+myTotal <- find_total(myReadShelf)
+
+clean_shelf <- function(shelf){
+  title <- shelf %>% 
+    xml_find_all("//title") %>% 
+    xml_text()
+  
+  author <- shelf %>% 
+    xml_find_all("//author") %>% 
+    xml_attrs() 
+  
+  read_count <- shelf %>% 
+    xml_find_all("//read_count") %>% 
+    xml_text()
+  
+  read_at <- shelf %>% 
+    xml_find_all("//read_at") %>% 
+    xml_text()
+  
+  rating <- shelf %>% 
+    xml_find_all("//rating") %>% 
+    xml_text()
+
+  
+  
+  df <- tibble(title, author, read_count, read_at, rating)
+  return(author)
+}
+
+myCleanShelf <- clean_shelf(myReadShelf)
+```
+
+
+Ok, so I have all the pieces, now to write a function that can cycle through all of the pages necessary. 
+
+
+```{r}
+parse_books <- function(contents, userID){
+  title <- contents %>% 
+    xml_find_all("//title") %>% 
+    xml_text()
+  
+  author <- contents %>% 
+    xml_find_all("//name") %>% 
+    xml_text()
+  
+  read_count <- contents %>% 
+    xml_find_all("//read_count") %>% 
+    xml_text()
+  
+  read_at <- contents %>% 
+    xml_find_all("//read_at") %>% 
+    xml_text()
+  
+  rating <- contents %>% 
+    xml_find_all("//rating") %>% 
+    xml_text()
+  
+  df <- tibble(userID, title, author, read_count, read_at, rating)
+  
+  # define the location and filename for the new file
+  fileName = here::here("assets", "data", "raw_data", "rereads.csv")
+
+  # export the data to a csv
+	write.table(df, file = fileName, row.names = FALSE, append = TRUE, sep = ",", col.names = !file.exists(fileName))
+}
+```
+
+```{r}
+get_first_page <- function(userID){
+  URL <- "https://www.goodreads.com/review/list"
+  # collects the data from the first page, including the total number of books on the user's "read" shelf
+  shelf <- GET(URL, query = list(v = 2, key = API_KEY, id = userID, shelf = "read", per_page = 200, page = 1))
+  status <- status_code(shelf)
+  shelf_contents <- content(shelf, as = "parsed")
+  
+  # TODO: parse the shelf contents and export to file
+  parse_books(shelf_contents, userID)
+  
+  # finds total number of books on "read" shelf and returns that number
+  kids <- xml_children(shelf_contents)
+  total <- xml_attr(kids[3], "total") %>% as.numeric()
+  return(total)
+}
+```
+
+```{r}
+get_subsequent_pages <- function(userID, page_number){
+  URL <- "https://www.goodreads.com/review/list"
+  shelf <- GET(URL, query = list(v = 2, key = API_KEY, id = userID, shelf = "read", per_page = 200, page = page_number))
+  shelf_contents <- content(shelf, as = "parsed")
+  
+  parse_books(shelf_contents, userID)
+}
+```
+
+
+```{r}
+add_ID <- function(userID){
+  alreadyChecked <- as_tibble(userID)
+  
+  # define the location and filename for the new file
+  fileName = here::here("assets", "data", "raw_data", "users.csv")
+
+  # export the data to a csv
+	write.table(alreadyChecked, file = fileName, row.names = FALSE, append = TRUE, sep = ",", col.names = !file.exists(fileName))
+}
+```
+
+```{r}
+find_rereads <- function(userID){
+  API_KEY <- Sys.getenv("GOODREADS_KEY")
+  URL <- "https://www.goodreads.com/review/list"
+
+  total <- get_first_page(userID)
+  
+  if (class(total) == "numeric" & total > 200){
+    totalPages <- ceiling(total / 200)
+  
+    # 200 results allowed per page
+    breakpoints <- seq(2, totalPages, by = 1)
+  
+    walk2(userID, breakpoints, get_subsequent_pages)
+  }
+}
+
+possibly_find_rereads <- purrr::possibly(find_rereads, otherwise = NA)
+```
+
+### Mara's Data
+Let's start by looking at Mara Averick's read books (since she has quite a few)
+
+
+```{r}
+find_rereads(1923002)
+```
+
+```{r eval = TRUE}
+mara <- read.csv(here::here("assets", "data", "raw_data", "rereads.csv"))
+glimpse(mara)
+```
+
+Amazing, that seems to be working great! 
+
+### Most Recent Reviewers
+
+Now to get lots of user ids to parse through. The simplest way to do that may be to find the users that recently updated something and find all the books on their "read" shelf. Looks like this caps at 20 users, so I'll start there.
+
+```{r}
+find_recent_reviews <- function(){
+  API_KEY <- Sys.getenv("GOODREADS_KEY")
+  URL <- "https://www.goodreads.com/review/list"
+  recent <- rgoodreads::recent_reviews() %>% 
+    separate(col = user, c("userName", "userID"), ":")
+  
+  # load in the already checked ID's
+  alreadyChecked <- read.csv(here::here("assets", "data", "raw_data", "users.csv"))
+  
+  # find only new IDs
+  newIDs <- recent %>% 
+    filter(!userID %in% alreadyChecked$value)
+  
+  # add new IDs to the list so they don't get double checked
+  walk(newIDs$userID, add_ID)
+  
+  # find rereads for all users of recently reviewed things
+  walk(newIDs$userID, possibly_find_rereads)
+}
+
+find_recent_reviews()
+```
+
+Let's try re-running this every 10 minutes for the next hour. 
+```{r}
+keep_finding_reviews <- function(i, .pb = NULL){
+  # progress bar stuff
+  if ((!is.null(.pb)) && inherits(.pb, "Progress") && (.pb$i < .pb$n)) .pb$tick()$print()
+  
+  # sleep for 10 minutes
+  Sys.sleep(600)
+  
+  # look for recent reviews
+  find_recent_reviews()
+}
+
+loops <- seq(1, 6)
+pb <- progress_estimated(length(loops))
+walk(loops, keep_finding_reviews, .pb = pb)
+```
+
+
+```{r eval = TRUE}
+reads <- read.csv(here::here("assets", "data", "raw_data", "rereads.csv"))
+```
+
+Ok, so let's see how many books were reread.
+
+```{r eval = TRUE}
+rereads <- reads %>% 
+  mutate(read_count = as.numeric(as.character(read_count))) %>% 
+  filter(read_count > 1)
+
+nrow(rereads)
+```
+
+```{r echo = FALSE, eval = TRUE}
+readUsers <- reads %>% count(userID)
+rereadUsers <- rereads %>% 
+  count(userID)
+```
+Wow, ok, so out of the `r nrow(reads)` books that were read by these `r nrow(readUsers)` users, `r nrow(rereads)` (`r round(nrow(rereads)/nrow(reads) * 100)`%) were reread at least once. And, `r nrow(rereadUsers)` (`r round(nrow(rereadUsers)/nrow(readUsers) * 100)`%) of the readers randomly surveyed re-read books. 
+
+
+```{r warning = FALSE, message = FALSE}
+walk(readUsers$userID, add_ID)
+```
+
+
