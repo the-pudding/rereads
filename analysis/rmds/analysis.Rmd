@@ -10,7 +10,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, warning = FALSE)
 ```
 
 ## Introduction
@@ -262,7 +262,7 @@ keep_finding_reviews <- function(i, .pb = NULL){
   if ((!is.null(.pb)) && inherits(.pb, "Progress") && (.pb$i < .pb$n)) .pb$tick()$print()
   
   # sleep for 10 minutes
-  Sys.sleep(600)
+  Sys.sleep(200)
   
   # look for recent reviews
   find_recent_reviews()
@@ -289,15 +289,173 @@ nrow(rereads)
 ```
 
 ```{r echo = FALSE, eval = TRUE}
-readUsers <- reads %>% count(userID)
+readUsers <- reads %>% 
+  mutate(userID = as.numeric(as.character(userID))) %>% 
+  filter(!is.na(userID)) %>% 
+  count(userID)
+
 rereadUsers <- rereads %>% 
+  mutate(userID = as.numeric(as.character(userID))) %>% 
+  filter(!is.na(userID)) %>%
   count(userID)
 ```
 Wow, ok, so out of the `r nrow(reads)` books that were read by these `r nrow(readUsers)` users, `r nrow(rereads)` (`r round(nrow(rereads)/nrow(reads) * 100)`%) were reread at least once. And, `r nrow(rereadUsers)` (`r round(nrow(rereadUsers)/nrow(readUsers) * 100)`%) of the readers randomly surveyed re-read books. 
 
+Let's see what other questions we can start to answer.
 
-```{r warning = FALSE, message = FALSE}
-walk(readUsers$userID, add_ID)
+### Most re-read book
+
+Is everyone re-reading the same book?
+
+```{r eval = TRUE}
+uniqueBook <- rereads %>% 
+  distinct(userID, title) %>% 
+  count(title)
+
+unique100 <- uniqueBook %>% 
+  arrange(desc(n)) %>% 
+  top_n(50)
+
+unique100
 ```
 
+Well, ok, looks like Harry Potter and other YA fantasy series (Hunger Games, Percy Jackson) are frequently re-read, along with some romance novels.
+
+### How many times do users re-read?
+
+Does a single user re-read the same story over and over? Or have they read several stories multiple times?
+
+```{r eval = TRUE}
+ggplot(rereads, aes(x = read_count)) + geom_histogram()
+```
+
+Ok, so most of the books were reread just twice. Let's look at the ones that users reread more than that.
+
+
+```{r eval = TRUE}
+readManyTimes <- rereads %>% 
+  filter(read_count > 2) %>% 
+  arrange(desc(read_count))
+
+head(readManyTimes)
+```
+
+Wow, that one user *really* likes **The Hobbit**.
+
+What's the average number of times different titles have been re-read?
+
+
+```{r eval = TRUE}
+avgReads <- rereads %>% 
+  group_by(title, author) %>% 
+  summarise(avg = mean(read_count), count = n()) %>% 
+  arrange(desc(avg))
+
+head(avgReads, 10)
+```
+
+Hmm, many of these favorites are re-read only by a single user. Maybe I should look at how many people have read each title at all.
+
+```{r eval = TRUE}
+overallRead <- reads %>% 
+  mutate(read_count = as.numeric(as.character(read_count))) %>% 
+  filter(!is.na(read_count)) %>% 
+  filter(title %in% uniqueBook$title) %>% 
+  group_by(title, author) %>% 
+  summarise(avg = mean(read_count), count = n()) %>% 
+  arrange(desc(avg))
+
+head(overallRead)
+```
+
+
+### Date of re-reading
+
+Lots of people are currently self-quarantined, has there been any increase in rereading old, comfortable favorites?
+
+```{r eval = TRUE}
+lastReRead <- rereads %>% 
+  separate(read_at, into =c("weekday", "month", "day", "time", "zone", "year"), sep = " ", fill = "right") %>% 
+  mutate(date = paste0(month, "-", day, "-", year)) %>% 
+  mutate(date = lubridate::mdy(date)) %>% 
+  group_by(year, month) %>% 
+  summarise(count = n()) %>% 
+  ungroup() %>% 
+  mutate(year = as.numeric(as.character(year))) %>% 
+  filter(!is.na(year)) %>% 
+  filter(year >= 2017)
+
+lrrGraph <- lastReRead %>% 
+  mutate(year = as.factor(year), 
+         month = factor(month, levels = month.abb))
+```
+
+```{r eval = TRUE}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+ggplot(lrrGraph, aes(month, fill = year)) + 
+  geom_bar(aes(weight = count), position = "dodge") +
+  scale_fill_manual(values = cbbPalette)
+```
+
+Wow, ok, so, there's definitely been a steady uptick in re-reads in early 2020. Though, the caveat to this is that I only have the date for the most *recent* re-read. Even so, it seems like people have been sinking their time into old favorites.
+
+Let's see if the rate of reading overall has spiked during this time. 
+
+```{r eval = TRUE}
+lastRead <- reads %>% 
+  separate(read_at, into =c("weekday", "month", "day", "time", "zone", "year"), sep = " ", fill = "right") %>% 
+  mutate(date = paste0(month, "-", day, "-", year)) %>% 
+  mutate(date = lubridate::mdy(date)) %>% 
+  group_by(year, month) %>% 
+  summarise(count = n()) %>% 
+  ungroup() %>% 
+  mutate(year = as.numeric(as.character(year))) %>% 
+  filter(!is.na(year)) %>% 
+  filter(year >= 2017)
+
+lrGraph <- lastRead %>% 
+  mutate(year = as.factor(year), 
+         month = factor(month, levels = month.abb))
+```
+
+```{r eval = TRUE}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+ggplot(lrGraph, aes(month, fill = year)) + 
+  geom_bar(aes(weight = count), position = "dodge") +
+  scale_fill_manual(values = cbbPalette)
+```
+
+Ok, so we see a very similar pattern of increased reading happening at the start of 2020. What about the ratio of read to re-read books per month over this time span?
+
+```{r eval = TRUE}
+ratio <- lastRead %>% 
+  rename(reads = count) %>% 
+  left_join(lastReRead) %>% 
+  rename(rereads = count) %>% 
+  mutate(ratio = rereads/reads)
+
+ratioGraph <- ratio %>% 
+  mutate(year = as.factor(year), 
+         month = factor(month, levels = month.abb)) %>% 
+  arrange(year, month)
+```
+
+```{r eval = TRUE}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+ggplot(ratioGraph, aes(month, fill = year)) + 
+  geom_bar(aes(weight = ratio), position = "dodge") +
+  scale_fill_manual(values = cbbPalette)
+```
+
+Alright, so the ratio of re-reads to read books has been higher so far in March & April than it was at the same time in 2019, but not much higher than in 2018. 
+
+```{r eval = TRUE}
+ratioLine <- ratioGraph %>% 
+  mutate(index = row_number())
+
+ggplot(ratioLine, aes(x = index, y = ratio)) + geom_line()
+```
 
